@@ -1,0 +1,63 @@
+#!/usr/bin/python3
+
+# Importing necessary modules
+import math
+import easysnmp
+import sys
+import time
+from easysnmp import Session, snmp_get, snmp_walk
+
+# Parsing device information from command-line arguments
+device_info = sys.argv[1]
+ip_addr, port, community = device_info.split(':')
+polling_frequency = float(sys.argv[2])
+poll_interval = 1 / polling_frequency
+num_samples = int(sys.argv[3])
+
+# Extracting OIDs from command-line arguments
+oids = ['1.3.6.1.2.1.1.3.0'] + sys.argv[4:]
+
+# Function to perform SNMP polling
+def perform_snmp_polling():
+    global initial_oid_values, last_time_checked
+    session = Session(hostname=ip_addr, remote_port=port, community=community, version=2, timeout=1, retries=1)
+    response = session.get(oids)
+    current_oid_values = []
+
+    for i in range(1, len(response)):
+        if response[i].value not in ('NOSUCHOBJECT', 'NOSUCHINSTANCE'):
+            current_oid_values.append(int(response[i].value))
+            if iteration > 0 and initial_oid_values:
+                value_diff = int(current_oid_values[i-1]) - int(initial_oid_values[i-1])
+                elapsed_time = round(current_timestamp - last_time_checked, 1)
+                rate = int(value_diff / elapsed_time)
+                if rate < 0:
+                    if response[i].snmp_type == 'COUNTER32':
+                        value_diff += 2**32
+                    elif response[i].snmp_type == 'COUNTER64':
+                        value_diff += 2**64
+                    print(f"{current_timestamp}|{value_diff / elapsed_time}|")
+                else:
+                    print(f"{current_timestamp}|{rate}|")
+
+    initial_oid_values = current_oid_values
+    last_time_checked = current_timestamp
+
+# Handling infinite sampling case
+if num_samples == -1:
+    iteration = 0
+    initial_oid_values = []
+    while True:
+        current_timestamp = time.time()
+        perform_snmp_polling()
+        response_end_time = time.time()
+        iteration += 1
+        time.sleep(abs(poll_interval - (response_end_time - current_timestamp)))
+else:
+    # Handling finite sampling case
+    initial_oid_values = []
+    for iteration in range(num_samples + 1):
+        current_timestamp = time.time()
+        perform_snmp_polling()
+        response_end_time = time.time()
+        time.sleep(abs(poll_interval - (response_end_time - current_timestamp)))
